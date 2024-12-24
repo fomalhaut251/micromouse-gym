@@ -9,7 +9,11 @@ class MazeGenerator(object):
         0表示有墙, 1表示无墙。
         第1位对应格子的上边, 第2位对应右边, 第3位对应下边, 第4位对应左边。
     """
-    def __init__(self, maze_size=16):
+    def __init__(self, maze_size=8):
+        # 确保迷宫大小为偶数
+        if maze_size % 2 != 0:
+            raise ValueError("迷宫大小必须是偶数，因为终点需要在正中心的2x2区域内")
+            
         self.valid_actions = ['U', 'R', 'D', 'L']
         self.direction_bit_map = {'U': 1, 'R': 2, 'D': 4, 'L': 8}
         self.move_map = {
@@ -19,7 +23,16 @@ class MazeGenerator(object):
             'L': (-1, 0),  # 向左移动时x减1
         }
         self.start_point = (0, 0)
-        self.destination = (maze_size - 1, maze_size - 1)
+        # 定义中心四个格子的位置
+        center = maze_size // 2
+        self.center_cells = [
+            (center-1, center-1),  # 左上
+            (center-1, center),    # 右上
+            (center, center-1),    # 左下
+            (center, center)       # 右下
+        ]
+        # 随机选择一个中心格子作为真实终点
+        self.destination = random.choice(self.center_cells)
         
         # 生成迷宫数据
         self.maze_data = self.generate_maze((maze_size, maze_size))
@@ -34,10 +47,6 @@ class MazeGenerator(object):
             'loc': (0, 0),
             'dir': 'D',
         }
-        
-        # 奖励设置
-        self.reward = {}
-        self.set_reward()
         
         # pygame相关初始化
         self.screen = None
@@ -80,25 +89,27 @@ class MazeGenerator(object):
     
     def draw_destination(self):
         """绘制终点"""
-        # 添加边距到坐标计算中
-        dest_x = self.destination[1] * self.cell_size + self.margin
-        dest_y = self.destination[0] * self.cell_size + self.margin
-        
-        # 留出边缘空间，不覆盖墙壁
-        wall_margin = 2  # 边缘留出的像素数
-        
-        # 计算实际的绘制区域
-        draw_size = self.cell_size - 2 * wall_margin
-        square_size = draw_size // 4
-        
-        # 绘制黑白相间的方格
-        for i in range(4):
-            for j in range(4):
-                color = (0, 0, 0) if (i + j) % 2 == 1 else (255, 255, 255)
-                pygame.draw.rect(self.screen, color,
-                               (dest_x + wall_margin + i * square_size,
-                                dest_y + wall_margin + j * square_size,
-                                square_size, square_size))
+        # 在所有中心格子上绘制终点标记
+        for cell in self.center_cells:
+            # 添加边距到坐标计算中
+            dest_x = cell[0] * self.cell_size + self.margin
+            dest_y = cell[1] * self.cell_size + self.margin
+            
+            # 留出边缘空间，不覆盖墙壁
+            wall_margin = 2  # 边缘留出的像素数
+            
+            # 计算实际的绘制区域
+            draw_size = self.cell_size - 2 * wall_margin
+            square_size = draw_size // 4
+            
+            # 绘制黑白相间的方格
+            for i in range(4):
+                for j in range(4):
+                    color = (0, 0, 0) if (i + j) % 2 == 1 else (255, 255, 255)
+                    pygame.draw.rect(self.screen, color,
+                                   (dest_x + wall_margin + i * square_size,
+                                    dest_y + wall_margin + j * square_size,
+                                    square_size, square_size))
     
     def draw_robot(self):
         """绘制机器人"""
@@ -116,7 +127,7 @@ class MazeGenerator(object):
         angle = angles[self.robot['dir']]
         angle_rad = np.radians(angle)
         
-        # 定义机器人各部分的相对尺寸
+        # 定义机器人部分的相对尺寸
         body_width = self.cell_size * 0.35
         body_height = self.cell_size * 0.3
         wheel_width = self.cell_size * 0.25
@@ -212,24 +223,28 @@ class MazeGenerator(object):
         参数:
             direction: 移动方向
         返回:
-            移动后获得的奖励值
+            tuple: (hit_wall, reached_destination)
+            - hit_wall: 布尔值，表示是否撞墙
+            - reached_destination: 布尔值，表示是否到达终点
         """
         if direction not in self.valid_actions:
             raise ValueError("Invalid Actions")
 
+        hit_wall = False
+        reached_destination = False
+
         if self.is_hit_wall(self.robot['loc'], direction):
             self.robot['dir'] = direction
-            reward = self.reward['hit_wall']
+            hit_wall = True
         else:
             new_x = self.robot["loc"][0] + self.move_map[direction][0]
             new_y = self.robot["loc"][1] + self.move_map[direction][1]
             self.robot['loc'] = (new_x, new_y)
             self.robot['dir'] = direction
             if self.robot['loc'] == self.destination:
-                reward = self.reward['destination']
-            else:
-                reward = self.reward['default']
-        return reward
+                reached_destination = True
+
+        return hit_wall, reached_destination
 
     def can_move_actions(self, position):
         """
@@ -281,25 +296,9 @@ class MazeGenerator(object):
             print('Invalid direction or location provided!')
             return True  # 如果出错，默认撞墙
 
-    def set_reward(self, reward=None):
-        """
-        设置不同情况下的奖励值
-        - hit_wall: 撞墙的惩罚
-        - destination: 到达终点的奖励
-        - default: 普通移动的奖励
-        """
-        if reward is None:
-            self.reward = {
-                "hit_wall": -10.,
-                "destination": 50.,
-                "default": -0.1,
-            }
-        else:
-            self.reward = reward
-
     def generate_maze(self, maze_size):
         """
-        使用Prim算法生成随机迷宫
+        使用改进的Prim算法生成随机迷宫
         参数:
             maze_size: 迷宫的尺寸，生成maze_size * maze_size的迷宫
         返回:
@@ -308,46 +307,109 @@ class MazeGenerator(object):
         maze_shape = maze_size + (4,)
         visited_cells = np.zeros(maze_size, dtype=np.int_)
         maze_data = np.zeros(maze_shape, dtype=np.int_)
+        center = maze_size[0] // 2
 
-        visited_cells[self.start_point[1], self.start_point[0]] = 1  # 修改访问标记的顺序
+        # 1. 处理中心区域
+        for cell in self.center_cells:
+            y, x = cell[1], cell[0]
+            maze_data[y, x] = [0, 0, 0, 0]
+            # 只将非真实终点的中心格子标记为已访问
+            if (x, y) != (self.destination[0], self.destination[1]):
+                visited_cells[y, x] = 1
+
+        # 2. 设置真实终点的一个随机外部连接
+        dest_y, dest_x = self.destination[1], self.destination[0]
+        possible_directions = []
+        # 检查四个方向是否在迷宫边界内且不是中心区域
+        if dest_y > 0 and (dest_x, dest_y-1) not in self.center_cells:  # 上
+            possible_directions.append(0)
+        if dest_x < maze_size[0]-1 and (dest_x+1, dest_y) not in self.center_cells:  # 右
+            possible_directions.append(1)
+        if dest_y < maze_size[1]-1 and (dest_x, dest_y+1) not in self.center_cells:  # 下
+            possible_directions.append(2)
+        if dest_x > 0 and (dest_x-1, dest_y) not in self.center_cells:  # 左
+            possible_directions.append(3)
+        
+        # 随机选择一个方向打开墙
+        open_direction = random.choice(possible_directions)
+        maze_data[dest_y, dest_x, open_direction] = 1
+        # 设置相邻格子的对应墙，但不标记为已访问，让Prim算法来处理
+        if open_direction == 0:  # 上
+            maze_data[dest_y-1, dest_x, 2] = 1
+        elif open_direction == 1:  # 右
+            maze_data[dest_y, dest_x+1, 3] = 1
+        elif open_direction == 2:  # 下
+            maze_data[dest_y+1, dest_x, 0] = 1
+        elif open_direction == 3:  # 左
+            maze_data[dest_y, dest_x-1, 1] = 1
+
+        # 3. 设置中心区域内部的连接（十字相通）
+        # 左上和右上之间的墙
+        maze_data[center-1, center-1, 1] = 1  # 左上格子的右墙
+        maze_data[center-1, center, 3] = 1    # 右上格子的左墙
+        # 左上和左下之间的墙
+        maze_data[center-1, center-1, 2] = 1  # 左上格子的下墙
+        maze_data[center, center-1, 0] = 1    # 左下格子的上墙
+        # 右上和右下之间的墙
+        maze_data[center-1, center, 2] = 1    # 右上格子的下墙
+        maze_data[center, center, 0] = 1      # 右下格子的上墙
+        # 左下和右下之间的墙
+        maze_data[center, center-1, 1] = 1    # 左下格子的右墙
+        maze_data[center, center, 3] = 1      # 右下格子的左墙
+
+        # 4. 使用Prim算法生成其余部分的迷宫
         wall_list = []
-
-        # 初始化起点周围的墙
-        for direction in range(4):  
-            current_wall = (self.start_point[1], self.start_point[0], direction)  # 修改坐标序
-            if maze_data[current_wall] == 0 and not self.is_edge(current_wall, maze_size):
-                wall_list.append(current_wall)
+        # 将起点周围的墙加入列表
+        for direction in range(4):
+            wall_info = (self.start_point[1], self.start_point[0], direction)
+            if not self.is_edge(wall_info, maze_size):
+                wall_list.append(wall_info)
+        visited_cells[self.start_point[1], self.start_point[0]] = 1
 
         while len(wall_list):
+            # 随机选择一个墙
             random_index = random.randint(0, len(wall_list) - 1)
-            current_wall = wall_list[random_index]
+            wall_info = wall_list[random_index]
+            current_y, current_x = wall_info[0], wall_info[1]
+            wall_direction = wall_info[2]
+            
+            # 计算相邻格子的坐标
+            adjacent_y, adjacent_x = current_y, current_x
+            if wall_direction == 0:  # 上
+                adjacent_y = current_y - 1
+            elif wall_direction == 1:  # 右
+                adjacent_x = current_x + 1
+            elif wall_direction == 2:  # 下
+                adjacent_y = current_y + 1
+            elif wall_direction == 3:  # 左
+                adjacent_x = current_x - 1
 
-            current_cell = (current_wall[0], current_wall[1])  # y, x
-            adjacent_cell = (0, 0)
+            # 检查是否是非真实终点的中心区域
+            is_center = ((current_x, current_y) in self.center_cells and \
+                        (current_x, current_y) != (self.destination[0], self.destination[1])) or \
+                       ((adjacent_x, adjacent_y) in self.center_cells and \
+                        (adjacent_x, adjacent_y) != (self.destination[0], self.destination[1]))
 
-            if current_wall[2] == 0:  # 上
-                adjacent_cell = (current_wall[0] - 1, current_wall[1])
-            elif current_wall[2] == 1:  # 右方
-                adjacent_cell = (current_wall[0], current_wall[1] + 1)
-            elif current_wall[2] == 2:  # 下方
-                adjacent_cell = (current_wall[0] + 1, current_wall[1])
-            elif current_wall[2] == 3:  # 左方
-                adjacent_cell = (current_wall[0], current_wall[1] - 1)
+            # 如果不是中心区域且至少有一个格子未访问，则打通墙壁
+            if not is_center and (visited_cells[current_y, current_x] == 0 or \
+                                visited_cells[adjacent_y, adjacent_x] == 0):
+                # 打通当前格子到相邻格子的墙
+                maze_data[current_y, current_x, wall_direction] = 1
+                # 打通相邻格子到当前格子的墙
+                opposite_direction = (wall_direction + 2) % 4
+                maze_data[adjacent_y, adjacent_x, opposite_direction] = 1
+                visited_cells[adjacent_y, adjacent_x] = 1
 
-            if visited_cells[current_cell] == 0 or visited_cells[adjacent_cell] == 0:
-                maze_data[current_wall] = 1
-                opposite_direction = (current_wall[2] + 2 if current_wall[2] + 2 < 4 else current_wall[2] - 2)
-                maze_data[adjacent_cell + (opposite_direction,)] = 1
-                visited_cells[adjacent_cell] = 1
-                
-                # 相邻单元格的未访问墙加入列表
+                # 将相邻格子的其他墙加入列表
                 for direction in range(4):
-                    new_wall = adjacent_cell + (direction,)
-                    if maze_data[new_wall] == 0 and not self.is_edge(new_wall, maze_size):
-                        wall_list.append(new_wall)
-            else:
-                wall_list.pop(random_index)
-                
+                    new_wall_info = (adjacent_y, adjacent_x, direction)
+                    if not self.is_edge(new_wall_info, maze_size):
+                        if (adjacent_x, adjacent_y) not in self.center_cells or \
+                           (adjacent_x, adjacent_y) == (self.destination[0], self.destination[1]):
+                            wall_list.append(new_wall_info)
+            
+            wall_list.pop(random_index)
+
         return maze_data
 
     def is_edge(self, wall, shape):
@@ -375,7 +437,7 @@ if __name__ == "__main__":
     import pygame
     from pygame.locals import *
 
-    maze = MazeGenerator(maze_size=8)
+    maze = MazeGenerator(maze_size=16)
     
     print("使用方向键控制机器人移动,按'q'退出游戏")
     print("目标:到达终点的黑白方格")
