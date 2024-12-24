@@ -1,6 +1,7 @@
 import numpy as np
 import random
 import pygame
+import os
 
 class MazeGenerator(object):
     """
@@ -9,7 +10,13 @@ class MazeGenerator(object):
         0表示有墙, 1表示无墙。
         第1位对应格子的上边, 第2位对应右边, 第3位对应下边, 第4位对应左边。
     """
-    def __init__(self, maze_size=8):
+    def __init__(self, maze_size=8, seed=None):
+        # 设置随机种子
+        self.seed = seed
+        if seed is not None:
+            random.seed(seed)
+            np.random.seed(seed)
+            
         # 确保迷宫大小为偶数
         if maze_size % 2 != 0:
             raise ValueError("迷宫大小必须是偶数，因为终点需要在正中心的2x2区域内")
@@ -22,6 +29,14 @@ class MazeGenerator(object):
             'D': (0, +1),  # 向下移动时y加1
             'L': (-1, 0),  # 向左移动时x减1
         }
+        # 方向对应的角度（原图朝上，所以向上是0度，顺时针旋转）
+        self.direction_angles = {
+            'U': 0,  # 向上时不需要旋转
+            'R': 270,  # 向右需要逆时针旋转90度
+            'D': 180,    # 向下需要旋转180度
+            'L': 90    # 向左需要顺时针旋转90度
+        }
+        
         self.start_point = (0, 0)
         # 定义中心四个格子的位置
         center = maze_size // 2
@@ -37,6 +52,7 @@ class MazeGenerator(object):
         # 生成迷宫数据
         self.maze_data = self.generate_maze((maze_size, maze_size))
         self.maze_size = maze_size
+
         self.cell_size = 32  # 每个格子的像素大小
         self.margin = 20     # 边框边距
         # 窗口大小需要包含边距
@@ -51,7 +67,8 @@ class MazeGenerator(object):
         # pygame相关初始化
         self.screen = None
         self.clock = None
-        
+        self.robot_image = None
+
     def init_display(self):
         """初始化pygame显示"""
         if self.screen is None:
@@ -59,9 +76,18 @@ class MazeGenerator(object):
             self.screen = pygame.display.set_mode((self.window_size, self.window_size))
             self.clock = pygame.time.Clock()
             
+            # 加载机器人图片并设置透明背景
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            icon_path = os.path.join(current_dir, 'icon', 'robot.png')
+            original_image = pygame.image.load(icon_path).convert_alpha()
+            
+            # 缩放图片到合适大小（略小于格子大小）
+            robot_size = int(self.cell_size * 0.8)  # 图片大小为格子的80%
+            self.robot_image = pygame.transform.smoothscale(original_image, (robot_size, robot_size))
+
     def draw_walls(self):
         """绘制迷宫墙壁"""
-        wall_color = (64, 64, 64)  # 深灰色
+        wall_color = (8, 8, 8)  # 深灰色
         wall_width = 2
         
         for row in range(self.maze_size):
@@ -92,107 +118,39 @@ class MazeGenerator(object):
         # 在所有中心格子上绘制终点标记
         for cell in self.center_cells:
             # 添加边距到坐标计算中
-            dest_x = cell[0] * self.cell_size + self.margin
-            dest_y = cell[1] * self.cell_size + self.margin
+            cell_x = cell[0] * self.cell_size + self.margin
+            cell_y = cell[1] * self.cell_size + self.margin
             
-            # 留出边缘空间，不覆盖墙壁
-            wall_margin = 2  # 边缘留出的像素数
+            # 计算每个小方格的大小
+            square_size = self.cell_size / 4
             
-            # 计算实际的绘制区域
-            draw_size = self.cell_size - 2 * wall_margin
-            square_size = draw_size // 4
-            
-            # 绘制黑白相间的方格
+            # 从中心向四周绘制4x4的黑白相间方格
             for i in range(4):
                 for j in range(4):
-                    color = (0, 0, 0) if (i + j) % 2 == 1 else (255, 255, 255)
+                    color = (32, 32, 32) if (i + j) % 2 == 1 else (255, 255, 255)
                     pygame.draw.rect(self.screen, color,
-                                   (dest_x + wall_margin + i * square_size,
-                                    dest_y + wall_margin + j * square_size,
+                                   (cell_x + i * square_size,
+                                    cell_y + j * square_size,
                                     square_size, square_size))
     
     def draw_robot(self):
         """绘制机器人"""
-        # 添加边距到坐标计算中
-        x = self.robot['loc'][0] * self.cell_size + self.cell_size // 2 + self.margin
-        y = self.robot['loc'][1] * self.cell_size + self.cell_size // 2 + self.margin
+        if self.robot_image is None:
+            return
+            
+        # 计算机器人在屏幕上的位置（居中显示在格子中）
+        robot_size = self.robot_image.get_width()
+        offset = (self.cell_size - robot_size) // 2  # 居中偏��量
+        x = self.robot['loc'][0] * self.cell_size + self.margin + offset
+        y = self.robot['loc'][1] * self.cell_size + self.margin + offset
         
-        # 根据方向确定朝向角度（修改角度定义以匹配pygame坐标系）
-        angles = {
-            'U': 270,  # 向上是270度
-            'R': 0,    # 向右是0度
-            'D': 90,   # 向下是90度
-            'L': 180   # 向左是180度
-        }
-        angle = angles[self.robot['dir']]
-        angle_rad = np.radians(angle)
+        # 绕中心点旋转图片
+        angle = self.direction_angles[self.robot['dir']]
+        rotated_robot = pygame.transform.rotate(self.robot_image, angle)
         
-        # 定义机器人部分的相对尺寸
-        body_width = self.cell_size * 0.35
-        body_height = self.cell_size * 0.3
-        wheel_width = self.cell_size * 0.25
-        wheel_height = self.cell_size * 0.1
-        head_size = self.cell_size * 0.25
-        
-        # 定义机器人的各部分顶点（朝右）
-        # 矩形主体
-        body_vertices = np.array([
-            [-body_width/2, -body_height/2],    # 左下
-            [body_width/2, -body_height/2],     # 右下
-            [body_width/2, body_height/2],      # 右上
-            [-body_width/2, body_height/2],     # 左上
-        ])
-        
-        # 三角形头部
-        head_vertices = np.array([
-            [body_width/2, -head_size/2],       # 底部左
-            [body_width/2 + head_size, 0],      # 尖端
-            [body_width/2, head_size/2],        # 底部右
-        ])
-        
-        # 上轮子
-        wheel1_vertices = np.array([
-            [-wheel_width/2, body_height/2],           # 左
-            [wheel_width/2, body_height/2],           # 右
-            [wheel_width/2, body_height/2 + wheel_height], # 右外
-            [-wheel_width/2, body_height/2 + wheel_height], # 左外
-        ])
-        
-        # 下轮子
-        wheel2_vertices = np.array([
-            [-wheel_width/2, -body_height/2 - wheel_height], # 左外
-            [wheel_width/2, -body_height/2 - wheel_height],  # 右外
-            [wheel_width/2, -body_height/2],                # 右
-            [-wheel_width/2, -body_height/2],              # 左
-        ])
-        
-        # 计算旋转矩阵
-        rotation_matrix = np.array([
-            [np.cos(angle_rad), -np.sin(angle_rad)],
-            [np.sin(angle_rad), np.cos(angle_rad)]
-        ])
-        
-        # 旋转并平移所有部件
-        def transform_vertices(vertices):
-            rotated = np.dot(vertices, rotation_matrix.T)
-            return rotated + np.array([x, y])
-        
-        rotated_body = transform_vertices(body_vertices)
-        rotated_head = transform_vertices(head_vertices)
-        rotated_wheel1 = transform_vertices(wheel1_vertices)
-        rotated_wheel2 = transform_vertices(wheel2_vertices)
-        
-        # 绘制机器人各部分
-        # 主体（浅蓝色）
-        pygame.draw.polygon(self.screen, (100, 149, 237), rotated_body)
-        pygame.draw.polygon(self.screen, (0, 0, 139), rotated_body, 1)
-        
-        # 头部（深蓝色）
-        pygame.draw.polygon(self.screen, (0, 0, 139), rotated_head)
-        
-        # 轮子（黑色）
-        pygame.draw.polygon(self.screen, (0, 0, 0), rotated_wheel1)
-        pygame.draw.polygon(self.screen, (0, 0, 0), rotated_wheel2)
+        # 绘制机器人（保持在格子中心）
+        rect = rotated_robot.get_rect(center=(x + robot_size//2, y + robot_size//2))
+        self.screen.blit(rotated_robot, rect)
     
     def update_display(self):
         """更新显示"""
@@ -202,8 +160,8 @@ class MazeGenerator(object):
         self.screen.fill((255, 255, 255))
         
         # 绘制迷宫元素（调整绘制顺序）
-        self.draw_walls()      # 先画墙壁
-        self.draw_destination()  # 再画终点
+        self.draw_destination()  # 先画终点
+        self.draw_walls()      # 再画墙壁
         self.draw_robot()      # 最后画机器人
         
         # 更新显示
@@ -222,7 +180,7 @@ class MazeGenerator(object):
         根据指定方向移动机器人
         参数:
             direction: 移动方向
-        返回:
+        返���:
             tuple: (hit_wall, reached_destination)
             - hit_wall: 布尔值，表示是否撞墙
             - reached_destination: 布尔值，表示是否到达终点
@@ -271,18 +229,24 @@ class MazeGenerator(object):
 
     def reset_robot(self):
         """
-        重置机器人位置到起点 (0, 0)
+        重置机器人位置到起点 (0, 0)，如果设置了种子，也重新生成相同的迷宫
         """
+        if self.seed is not None:
+            random.seed(self.seed)
+            np.random.seed(self.seed)
+            self.destination = random.choice(self.center_cells)
+            self.maze_data = self.generate_maze((self.maze_size, self.maze_size))
+            
         self.robot["loc"] = (0, 0)
 
     def is_hit_wall(self, location, direction):
         """
-        判断在给定位置向指定方向移动是否会撞墙
+        判断在给定位置向指定方向移动是否撞墙
         参数:
             location: 当前位置坐标元组 (x, y)
             direction: 移动方向('U','R','D','L')
         返回:
-            True表示会撞墙，False表示不会撞墙
+            True表示会撞墙,False表示不会撞墙
         """
         try:
             # 注意：maze_data的索引顺序是[y, x]，而location是(x, y)
@@ -300,7 +264,7 @@ class MazeGenerator(object):
         """
         使用改进的Prim算法生成随机迷宫
         参数:
-            maze_size: 迷宫的尺寸，生成maze_size * maze_size的迷宫
+            maze_size: 迷宫的尺寸,生成maze_size * maze_size的迷宫
         返回:
             maze_data: 包含壁信息的三维数组
         """
@@ -359,7 +323,7 @@ class MazeGenerator(object):
 
         # 4. 使用Prim算法生成其余部分的迷宫
         wall_list = []
-        # 将起点周围的墙加入列表
+        # 将起点周围的加入列表
         for direction in range(4):
             wall_info = (self.start_point[1], self.start_point[0], direction)
             if not self.is_edge(wall_info, maze_size):
@@ -393,6 +357,12 @@ class MazeGenerator(object):
             # 如果不是中心区域且至少有一个格子未访问，则打通墙壁
             if not is_center and (visited_cells[current_y, current_x] == 0 or \
                                 visited_cells[adjacent_y, adjacent_x] == 0):
+                # 如果当前格子或相邻格子是终点，跳过（保护终点的墙壁状态）
+                if (current_x, current_y) == (self.destination[0], self.destination[1]) or \
+                   (adjacent_x, adjacent_y) == (self.destination[0], self.destination[1]):
+                    wall_list.pop(random_index)
+                    continue
+                
                 # 打通当前格子到相邻格子的墙
                 maze_data[current_y, current_x, wall_direction] = 1
                 # 打通相邻格子到当前格子的墙
