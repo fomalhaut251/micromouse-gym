@@ -33,38 +33,44 @@ def test_maze_env():
     """测试迷宫环境"""
     print("开始测试迷宫环境...")
     
-    # 创建训练环境（不渲染）
+    # 创建训练环境（不渲染），使用固定种子
+    maze_seed = 42  # 使用固定种子
     env = gym.make('gymnasium_env/Maze-v0')
     print("\n环境信息:")
     print(f"动作空间: {env.action_space}")
     print(f"观测空间: {env.observation_space}")
     
+    # 首次重置时使用固定种子生成迷宫
+    obs, info = env.reset(seed=maze_seed, options={'generate_new_maze': True})
+    
     # 训练过程
     print("\n开始训练...")
-    episodes = 100  # 增加训练回合数
-    max_steps = 100
+    episodes = 1000
+    max_steps = 1000
     best_steps = float('inf')
-    best_seed = None
+    
+    # 添加进度显示
+    print_interval = episodes // 10  # 每10%显示一次进度
     
     for episode in range(episodes):
-        seed = episode  # 使用回合数作为种子
-        obs, info = env.reset(seed=seed)
+        # 显示进度
+        if episode % print_interval == 0:
+            print(f"训练进度: {episode/episodes*100:.1f}%")
+            
+        # 重置时不生成新迷宫，只重置机器人位置
+        obs, info = env.reset(options={'generate_new_maze': False})
         steps = 0
         
         while True:
-            # 根据墙壁信息选择可行的动作
             valid_actions = get_valid_actions(obs['cell_walls'])
             action = np.random.choice(valid_actions)
             
-            # 执行动作
             obs, reward, terminated, truncated, info = env.step(action)
             steps += 1
             
             if terminated:
-                # 如果找到更好的路径，记录下来
                 if steps < best_steps:
                     best_steps = steps
-                    best_seed = seed
                 print(f"回合 {episode + 1}: 到达终点，用了 {steps} 步")
                 break
             elif truncated or steps >= max_steps:
@@ -72,28 +78,7 @@ def test_maze_env():
                 break
     
     env.close()
-    print(f"\n训练结束！最佳步数: {best_steps}，使用种子: {best_seed}")
-    
-    # 展示最佳结果
-    print("\n展示最佳路径...")
-    env = gym.make('gymnasium_env/Maze-v0', render_mode="human")
-    obs, info = env.reset(seed=best_seed)
-    steps = 0
-    
-    while True:
-        valid_actions = get_valid_actions(obs['cell_walls'])
-        action = np.random.choice(valid_actions)
-        
-        obs, reward, terminated, truncated, info = env.step(action)
-        steps += 1
-        
-        if terminated or truncated or steps >= max_steps:
-            break
-        
-        time.sleep(0.1)  # 放慢展示速度
-    
-    env.close()
-    print("测试完成!")
+    print(f"\n训练结束！最佳步数: {best_steps}")
 
 if __name__ == "__main__":
     test_maze_env() 

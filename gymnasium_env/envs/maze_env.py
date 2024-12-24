@@ -47,7 +47,7 @@ class MazeEnv(gym.Env):
         super().__init__()
         
         self.size = size  # 迷宫大小
-        self.maze = MazeGenerator(maze_size=size)  # 迷宫生成器
+        self.maze = None  # 延迟初始化迷宫生成器
         self.reward_config = RewardConfig()  # 奖励配置
         
         # 定义动作空间
@@ -87,7 +87,7 @@ class MazeEnv(gym.Env):
         
         参数:
             seed: 随机种子
-            options: 其他配置选项
+            options: 其他配置选项，可以包含 'generate_new_maze' 键
             
         返回:
             observation: 初始观测值
@@ -96,8 +96,20 @@ class MazeEnv(gym.Env):
         # 初始化随机数生成器
         super().reset(seed=seed)
         
-        # 重置迷宫和智能体
-        self.maze.reset_robot()
+        # 从options中获取是否生成新迷宫的配置，默认为True
+        generate_new_maze = True
+        if options is not None and 'generate_new_maze' in options:
+            generate_new_maze = options['generate_new_maze']
+        
+        if generate_new_maze:
+            # 生成新迷宫
+            self.maze = MazeGenerator(maze_size=self.size, seed=seed)
+        else:
+            # 只重置机器人位置
+            self.maze.robot = {
+                'loc': (0, 0),
+                'dir': 'D'
+            }
         
         # 获取观测和信息
         observation = self._get_obs()
@@ -119,7 +131,7 @@ class MazeEnv(gym.Env):
         返回:
             observation: 新的观测值
             reward: 奖励值
-            terminated: 是否到达终��
+            terminated: 是否到达终点
             truncated: 是否因其他原因终止
             info: 附加信息
         """
@@ -131,7 +143,7 @@ class MazeEnv(gym.Env):
         action_str = self._idx_to_action[action]
         
         # 执行动作并获取结果
-        _, reached_destination = self.maze.move_robot(action_str)
+        reached_destination = self.maze.move_robot(action_str)
         
         # 计算奖励
         rewards = self.reward_config.get_rewards()
