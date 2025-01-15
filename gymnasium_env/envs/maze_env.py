@@ -18,17 +18,26 @@ class MazeEnv(gym.Env):
     迷宫环境类，实现 Gymnasium 接口。
     
     观测空间:
-        Dict类型，包含:
-        - location: Box(0, maze_size-1, (2,), int) - 智能体在迷宫中的位置坐标
-        - direction: Discrete(4) - 智能体朝向 (0:上, 1:右, 2:下, 3:左)
-        - cell_walls: Box(0, 1, (4,), bool) - 当前格子的墙 [上,右,下,左]，1表示有墙
+        Dict类型，包含四个键：
+        - position: Box(low=0, high=size-1, shape=(2,), dtype=int32)
+          表示机器人的(x,y)坐标
+        - direction: Discrete(4)
+          表示机器人的朝向，0:上, 1:右, 2:下, 3:左
+        - walls: MultiBinary(4)
+          表示当前位置四个方向的墙壁状态，[上,右,下,左]，1表示有墙，0表示无墙
+        - explored_map: Box(low=0, high=1, shape=(size, size, 4), dtype=int8)
+          表示已探索区域的墙壁信息，shape为(迷宫大小, 迷宫大小, 4)
+          第三维的4个通道分别表示每个格子的[上,右,下,左]四个方向是否有墙
+          0表示无墙，1表示有墙
     
     动作空间:
         Discrete(4) - 离散动作空间，表示上、右、下、左四个移动方向
         
     奖励:
-        - destination: 到达终点奖励
-        - default: 每步移动的基础奖励，用于鼓励尽快到达终点
+        - reach_destination: 到达终点的奖励
+        - return_to_start: 返回起点的奖励
+        - optimal_path: 最短路径奖励
+        - default: 每步的负奖励，鼓励尽快完成任务
     """
     
     metadata = {
@@ -36,7 +45,7 @@ class MazeEnv(gym.Env):
         "render_fps": 30
     }
 
-    def __init__(self, render_mode=None, size=8):
+    def __init__(self, render_mode=None, size=16):
         """
         初始化迷宫环境
         
@@ -50,14 +59,18 @@ class MazeEnv(gym.Env):
         self.maze = None  # 延迟初始化迷宫生成器
         self.reward_config = RewardConfig()  # 奖励配置
         
+        # 初始化探索地图
+        self.explored_map = np.zeros((size, size, 4), dtype=np.int8)  # [上,右,下,左]
+        
         # 定义动作空间
         self.action_space = spaces.Discrete(4)
         
         # 定义观测空间
         self.observation_space = spaces.Dict({
-            "location": spaces.Box(0, size-1, shape=(2,), dtype=np.int32),
-            "direction": spaces.Discrete(4),
-            "cell_walls": spaces.Box(0, 1, shape=(4,), dtype=bool)  # 当前格子的墙
+            'position': spaces.Box(low=0, high=size-1, shape=(2,), dtype=np.int32),  # (x,y)坐标
+            'direction': spaces.Discrete(4),  # 朝向：0(上), 1(右), 2(下), 3(左)
+            'walls': spaces.MultiBinary(4),    # 四个方向的墙：[上,右,下,左]
+            'explored_map': spaces.Box(low=0, high=1, shape=(size, size, 4), dtype=np.int8)  # 探索地图
         })
         
         # 动作映射
@@ -80,36 +93,54 @@ class MazeEnv(gym.Env):
         
         # 初始化随机数生成器
         self.np_random = None
+        
+        # 状态追踪
+        self.is_destination_reached = False
+        self.episode_steps = 0
+        self.max_steps = size * size * 2  # 最大步数为迷宫大小的两倍
+        self.min_steps_to_destination = None  # 到达终点的最短步数
+        self.steps_to_destination = 0  # 实际到达终点的步数
+        self.total_steps = 0  # 总步数（包括返回起点）
 
     def reset(self, seed=None, options=None):
-        """
-        重置环境到初始状态
-        
-        参数:
-            seed: 随机种子
-            options: 其他配置选项，可以包含 'generate_new_maze' 键
-            
-        返回:
-            observation: 初始观测值
-            info: 环境信息
-        """
+        """重置环境到初始状态"""
         # 初始化随机数生成器
         super().reset(seed=seed)
         
-        # 从options中获取是否生成新迷宫的配置，默认为True
-        generate_new_maze = True
+        # 从options中获取是否生成新迷宫的配置，默认为False
+        generate_new_maze = False
         if options is not None and 'generate_new_maze' in options:
             generate_new_maze = options['generate_new_maze']
         
         if generate_new_maze:
             # 生成新迷宫
             self.maze = MazeGenerator(maze_size=self.size, seed=seed)
+            # 计算到达终点的最短步数
+            self.min_steps_to_destination = self.reward_config.calculate_min_steps_to_destination(
+                self.maze.maze_data, (0, 0), self.maze.destination
+            )
         else:
-            # 只重置机器人位置
-            self.maze.robot = {
-                'loc': (0, 0),
-                'dir': 'D'
-            }
+            # 如果迷宫还没有生成过，先生成一个
+            if self.maze is None:
+                self.maze = MazeGenerator(maze_size=self.size, seed=seed)
+                self.min_steps_to_destination = self.reward_config.calculate_min_steps_to_destination(
+                    self.maze.maze_data, (0, 0), self.maze.destination
+                )
+            else:
+                # 只重置机器人位置
+                self.maze.robot = {
+                    'loc': (0, 0),
+                    'dir': 'D'
+                }
+        
+        # 重置状态
+        self.is_destination_reached = False
+        self.episode_steps = 0
+        self.steps_to_destination = 0
+        self.total_steps = 0
+        
+        # 重置探索地图
+        self.explored_map = np.zeros((self.size, self.size, 4), dtype=np.int8)
         
         # 获取观测和信息
         observation = self._get_obs()
@@ -118,23 +149,11 @@ class MazeEnv(gym.Env):
         # 如果需要渲染，更新显示
         if self.render_mode == "human":
             self.render()
-            
+        
         return observation, info
 
     def step(self, action):
-        """
-        执行一步动作
-        
-        参数:
-            action: 动作索引 (0-3)
-            
-        返回:
-            observation: 新的观测值
-            reward: 奖励值
-            terminated: 是否到达终点
-            truncated: 是否因其他原因终止
-            info: 附加信息
-        """
+        """执行一步动作"""
         # 确保动作是整数
         if isinstance(action, np.ndarray):
             action = action.item()
@@ -142,17 +161,34 @@ class MazeEnv(gym.Env):
         # 获取动作字符串
         action_str = self._idx_to_action[action]
         
-        # 执行动作并获取结果
-        reached_destination = self.maze.move_robot(action_str)
+        # 执行动作
+        is_destination_reached, _ = self.maze.move_robot(action_str)
         
-        # 计算奖励
+        # 更新步数
+        self.episode_steps += 1
+        
+        # 计算基础奖励
         rewards = self.reward_config.get_rewards()
-        if reached_destination:
-            reward = rewards['destination']
+        reward = rewards['default']  # 每步都给予负奖励
+        
+        # 更新状态并计算奖励
+        if is_destination_reached and not self.is_destination_reached:
+            self.is_destination_reached = True
+            self.steps_to_destination = self.episode_steps
+            # 立即给予到达终点的奖励
+            reward += rewards['reach_destination']
+            # 计算最短路径奖励
+            reward += self.reward_config.calculate_final_score(
+                self.steps_to_destination,
+                self.min_steps_to_destination
+            )
+            # 到达终点后结束任务
             terminated = True
         else:
-            reward = rewards['default']
             terminated = False
+        
+        # 检查是否超过步数限制
+        truncated = self.episode_steps >= self.max_steps
         
         # 获取新的观测和信息
         observation = self._get_obs()
@@ -161,8 +197,8 @@ class MazeEnv(gym.Env):
         # 如果需要渲染，更新显示
         if self.render_mode == "human":
             self.render()
-            
-        return observation, reward, terminated, False, info
+        
+        return observation, reward, terminated, truncated, info
 
     def render(self):
         """渲染环境"""
@@ -175,39 +211,52 @@ class MazeEnv(gym.Env):
             self.maze.close_display()
 
     def _get_obs(self):
-        """
-        获取当前观测
-        
-        返回:
-            Dict类型的观测值，包含:
-            - location: 位置坐标
-            - direction: 朝向
-            - cell_walls: 当前格子的墙，1表示有墙 [上,右,下,左]
-        """
+        """获取当前观测"""
         # 获取当前位置
-        loc = self.maze.robot['loc']
-        # 获取当前格子的墙
-        cell_walls = np.array([
-            self.maze.is_hit_wall(loc, 'U'),  # 上墙
-            self.maze.is_hit_wall(loc, 'R'),  # 右墙
-            self.maze.is_hit_wall(loc, 'D'),  # 下墙
-            self.maze.is_hit_wall(loc, 'L')   # 左墙
-        ], dtype=bool)
+        x, y = self.maze.robot['loc']
         
+        # 获取当前方向
+        dir_idx = self._direction_to_idx[self.maze.robot['dir']]
+        
+        # 获取当前格子的墙
+        walls = np.zeros(4, dtype=np.int8)
+        if self.maze.is_hit_wall(self.maze.robot['loc'], 'U'):  # 上墙
+            walls[0] = 1
+        if self.maze.is_hit_wall(self.maze.robot['loc'], 'R'):  # 右墙
+            walls[1] = 1
+        if self.maze.is_hit_wall(self.maze.robot['loc'], 'D'):  # 下墙
+            walls[2] = 1
+        if self.maze.is_hit_wall(self.maze.robot['loc'], 'L'):  # 左墙
+            walls[3] = 1
+        
+        # 更新探索地图
+        self.explored_map[y, x] = walls
+            
+        # 返回字典类型的观测
         return {
-            "location": np.array(loc, dtype=np.int32),
-            "direction": self._direction_to_idx[self.maze.robot['dir']],
-            "cell_walls": cell_walls
+            'position': np.array([x, y], dtype=np.int32),
+            'direction': dir_idx,  # 直接返回整数
+            'walls': walls,
+            'explored_map': self.explored_map
         }
 
     def _get_info(self):
-        """
-        获取环境信息
-        
-        返回:
-            包含曼哈顿距离的信息字典
-        """
-        return {
-            "distance": abs(self.maze.robot['loc'][0] - self.maze.destination[0]) + 
-                       abs(self.maze.robot['loc'][1] - self.maze.destination[1])
+        """获取环境信息"""
+        info = {
+            "is_destination_reached": self.is_destination_reached,
+            "episode_steps": self.episode_steps,
+            "max_steps": self.max_steps,
+            "min_steps_to_destination": self.min_steps_to_destination,
+            "steps_to_destination": self.steps_to_destination if self.is_destination_reached else None,
+            "total_steps": self.total_steps if self.total_steps > 0 else None,
+            "explored_map": self.explored_map  # 添加探索地图到info中
         }
+        
+        # 如果任务完成，计算当前得分
+        if self.is_destination_reached and self.total_steps > 0:
+            info["current_score"] = self.reward_config.calculate_final_score(
+                self.total_steps,
+                self.min_steps_to_destination
+            )
+        
+        return info

@@ -10,7 +10,7 @@ class MazeGenerator(object):
         0表示有墙, 1表示无墙。
         第1位对应格子的上边, 第2位对应右边, 第3位对应下边, 第4位对应左边。
     """
-    def __init__(self, maze_size=32, seed=None, maze_density=0.9):
+    def __init__(self, maze_size=16, seed=None, maze_density=0.9):
         """
         初始化迷宫生成器
         参数:
@@ -40,14 +40,13 @@ class MazeGenerator(object):
         self.break_wall_probability = 1 - maze_density
             
         self.valid_actions = ['U', 'R', 'D', 'L']
-        self.direction_bit_map = {'U': 1, 'R': 2, 'D': 4, 'L': 8}
         self.move_map = {
             'U': (0, -1),  # 向上移动时y减1
             'R': (+1, 0),  # 向右移动时x加1
             'D': (0, +1),  # 向下移动时y加1
             'L': (-1, 0),  # 向左移动时x减1
         }
-        # 方向对应度（原图朝上，所以向上是0度，顺时针旋转）
+        # 方向对应角度（原图朝上，所以向上是0度，顺时针旋转）
         self.direction_angles = {
             'U': 0,  # 向上时不需要旋转
             'R': 270,  # 向右需要逆时针旋转90度
@@ -85,6 +84,10 @@ class MazeGenerator(object):
         self.screen = None
         self.clock = None
         self.robot_image = None
+        
+        # 只保留最短路径长度记录
+        self.shortest_path_length = float('inf')  # 记录最短路径长度
+        self.reached_destination = False  # 是否到达过终点
 
     def init_display(self):
         """初始化pygame显示"""
@@ -161,7 +164,7 @@ class MazeGenerator(object):
         x = self.robot['loc'][0] * self.cell_size + self.margin + offset
         y = self.robot['loc'][1] * self.cell_size + self.margin + offset
         
-        # 绕中心点旋转图片
+        # 中心点旋转图片
         angle = self.direction_angles[self.robot['dir']]
         rotated_robot = pygame.transform.rotate(self.robot_image, angle)
         
@@ -186,22 +189,24 @@ class MazeGenerator(object):
         self.clock.tick(30)
     
     def close_display(self):
-        """关闭显示"""
+        """关闭显示窗口"""
         if self.screen is not None:
             pygame.quit()
             self.screen = None
-            self.clock = None
 
     def move_robot(self, direction):
         """
-        ��据指定方向移动机器人
+        根据指定方向移动机器人
         参数:
             direction: 移动方向
         返回:
-            bool: 是否到达终点
+            tuple: (是否到达终点, 是否到达起点)
         """
         if direction not in self.valid_actions:
             raise ValueError("Invalid Actions")
+
+        is_destination_reached = False
+        is_start_reached = False
 
         # 检查是否是合法移动
         if direction in self.can_move_actions(self.robot['loc']):
@@ -212,11 +217,18 @@ class MazeGenerator(object):
             self.robot['dir'] = direction
             
             # 检查是否到达终点
-            return self.robot['loc'] == self.destination
+            if self.robot['loc'] == self.destination:
+                is_destination_reached = True
+            
+            # 检查是否回到起点
+            elif self.robot['loc'] == self.start_point:
+                is_start_reached = True
+                
         else:
             # 撞墙只改变方向
             self.robot['dir'] = direction
-            return False
+            
+        return is_destination_reached, is_start_reached
 
     def can_move_actions(self, position):
         """
@@ -257,125 +269,126 @@ class MazeGenerator(object):
         返回:
             maze_data: 包含壁信息的三维数组
         """
-        maze_shape = maze_size + (4,)
-        visited_cells = np.zeros(maze_size, dtype=np.int_)
-        maze_data = np.zeros(maze_shape, dtype=np.int_)
-        center = maze_size[0] // 2
+        while True:  # 循环直到生成有效的迷宫
+            maze_shape = maze_size + (4,)  # 每个格子存储4个方向的墙壁信息
+            visited_cells = np.zeros(maze_size, dtype=np.int_)
+            maze_data = np.zeros(maze_shape, dtype=np.int_)
+            center = maze_size[0] // 2
 
-        # 1. 处理中心区域
-        for cell in self.center_cells:
-            y, x = cell[1], cell[0]
-            maze_data[y, x] = [0, 0, 0, 0]
-            # 只将非真实终点的中心格子标记为已访问
-            if (x, y) != (self.destination[0], self.destination[1]):
-                visited_cells[y, x] = 1
+            # 1. 处理中心区域
+            for cell in self.center_cells:
+                y, x = cell[1], cell[0]
+                # 初始化4个值
+                maze_data[y, x] = [0, 0, 0, 0]
+                # 只将非真实终点的中心格子标记为已访问
+                if (x, y) != (self.destination[0], self.destination[1]):
+                    visited_cells[y, x] = 1
 
-        # 2. 设置真实终点的一个随机外部连接
-        dest_y, dest_x = self.destination[1], self.destination[0]
-        possible_directions = []
-        # 检查四个方向是否在迷宫边界内且不是中心区域
-        if dest_y > 0 and (dest_x, dest_y-1) not in self.center_cells:  # 上
-            possible_directions.append(0)
-        if dest_x < maze_size[0]-1 and (dest_x+1, dest_y) not in self.center_cells:  # 右
-            possible_directions.append(1)
-        if dest_y < maze_size[1]-1 and (dest_x, dest_y+1) not in self.center_cells:  # 下
-            possible_directions.append(2)
-        if dest_x > 0 and (dest_x-1, dest_y) not in self.center_cells:  # 左
-            possible_directions.append(3)
-        
-        # 随机选择一个方向打开墙
-        open_direction = random.choice(possible_directions)
-        maze_data[dest_y, dest_x, open_direction] = 1
-        # 设置相邻格子的对应墙，但不标记为已访问，让Prim算法来处理
-        if open_direction == 0:  # 上
-            maze_data[dest_y-1, dest_x, 2] = 1
-        elif open_direction == 1:  # 右
-            maze_data[dest_y, dest_x+1, 3] = 1
-        elif open_direction == 2:  # 下
-            maze_data[dest_y+1, dest_x, 0] = 1
-        elif open_direction == 3:  # 左
-            maze_data[dest_y, dest_x-1, 1] = 1
-
-        # 3. 设置中心区域内部的连接（十字相通）
-        # 左上和右上之间的墙
-        maze_data[center-1, center-1, 1] = 1  # 左上格子的右墙
-        maze_data[center-1, center, 3] = 1    # 右上格子的左墙
-        # 左上和左下之间的墙
-        maze_data[center-1, center-1, 2] = 1  # 左上格子的下墙
-        maze_data[center, center-1, 0] = 1    # 左下格子的上墙
-        # 右上和右下之间的墙
-        maze_data[center-1, center, 2] = 1    # 右上格子的下墙
-        maze_data[center, center, 0] = 1      # 右下格子的上墙
-        # 左下和右下之间的墙
-        maze_data[center, center-1, 1] = 1    # 左下格子的右墙
-        maze_data[center, center, 3] = 1      # 右下格子的左墙
-
-        # 4. 使用Prim算法生成基本迷宫结构
-        wall_list = []
-        # 将起点周围的墙加入列表
-        for direction in range(4):
-            wall_info = (self.start_point[1], self.start_point[0], direction)
-            if not self.is_edge(wall_info, maze_size):
-                wall_list.append(wall_info)
-        visited_cells[self.start_point[1], self.start_point[0]] = 1
-
-        while len(wall_list):
-            # 随机选择一个墙
-            random_index = random.randint(0, len(wall_list) - 1)
-            wall_info = wall_list[random_index]
-            current_y, current_x = wall_info[0], wall_info[1]
-            wall_direction = wall_info[2]
+            # 2. 设置真实终点的一个随机外部连接
+            dest_y, dest_x = self.destination[1], self.destination[0]
+            possible_directions = []
+            # 检查四个方向是否在迷宫边界内且不是中心区域
+            if dest_y > 0 and (dest_x, dest_y-1) not in self.center_cells:  # 上
+                possible_directions.append(0)
+            if dest_x < maze_size[0]-1 and (dest_x+1, dest_y) not in self.center_cells:  # 右
+                possible_directions.append(1)
+            if dest_y < maze_size[1]-1 and (dest_x, dest_y+1) not in self.center_cells:  # 下
+                possible_directions.append(2)
+            if dest_x > 0 and (dest_x-1, dest_y) not in self.center_cells:  # 左
+                possible_directions.append(3)
             
-            # 计算相邻格子的坐标
-            adjacent_y, adjacent_x = current_y, current_x
-            if wall_direction == 0:  # 上
-                adjacent_y = current_y - 1
-            elif wall_direction == 1:  # 右
-                adjacent_x = current_x + 1
-            elif wall_direction == 2:  # 下
-                adjacent_y = current_y + 1
-            elif wall_direction == 3:  # 左
-                adjacent_x = current_x - 1
+            # 随机选择一个方向打开墙
+            open_direction = random.choice(possible_directions)
+            maze_data[dest_y, dest_x, open_direction] = 1
+            # 设置相邻格子的对应墙，但不标记为已访问，让Prim算法来处理
+            if open_direction == 0:  # 上
+                maze_data[dest_y-1, dest_x, 2] = 1
+            elif open_direction == 1:  # 右
+                maze_data[dest_y, dest_x+1, 3] = 1
+            elif open_direction == 2:  # 下
+                maze_data[dest_y+1, dest_x, 0] = 1
+            elif open_direction == 3:  # 左
+                maze_data[dest_y, dest_x-1, 1] = 1
 
-            # 检查是否是非真实终点的中心区域
-            is_center = ((current_x, current_y) in self.center_cells and \
-                        (current_x, current_y) != (self.destination[0], self.destination[1])) or \
-                       ((adjacent_x, adjacent_y) in self.center_cells and \
-                        (adjacent_x, adjacent_y) != (self.destination[0], self.destination[1]))
+            # 3. 设置中心区域内部的连接（十字相通）
+            # 左上和右上之间的墙
+            maze_data[center-1, center-1, 1] = 1  # 左上格子的右墙
+            maze_data[center-1, center, 3] = 1    # 右上格子的左墙
+            # 左上和左下之间的墙
+            maze_data[center-1, center-1, 2] = 1  # 左上格子的下墙
+            maze_data[center, center-1, 0] = 1    # 左下格子的上墙
+            # 右上和右下之间的墙
+            maze_data[center-1, center, 2] = 1    # 右上格子的下墙
+            maze_data[center, center, 0] = 1      # 右下格子的上墙
+            # 左下和右下之间的墙
+            maze_data[center, center-1, 1] = 1    # 左下格子的右墙
+            maze_data[center, center, 3] = 1      # 右下格子的左墙
 
-            # 如果不是中心区域且至少有一个格子未访问，则打通墙壁
-            if not is_center and (visited_cells[current_y, current_x] == 0 or \
-                                visited_cells[adjacent_y, adjacent_x] == 0):
-                # 如果当前格子或相邻格子是终点，跳过（保护终点的墙壁状态）
-                if (current_x, current_y) == (self.destination[0], self.destination[1]) or \
-                   (adjacent_x, adjacent_y) == (self.destination[0], self.destination[1]):
-                    wall_list.pop(random_index)
-                    continue
+            # 4. 使用Prim算法生成基本迷宫结构
+            wall_list = []
+            # 将起点周围的墙加入列表
+            for direction in range(4):
+                wall_info = (self.start_point[1], self.start_point[0], direction)
+                if not self.is_edge(wall_info, maze_size):
+                    wall_list.append(wall_info)
+            visited_cells[self.start_point[1], self.start_point[0]] = 1
+
+            while len(wall_list):
+                # 随机选择一个墙
+                random_index = random.randint(0, len(wall_list) - 1)
+                wall_info = wall_list[random_index]
+                current_y, current_x = wall_info[0], wall_info[1]
+                wall_direction = wall_info[2]
                 
-                # 打通当前格子到相邻格子的墙
-                maze_data[current_y, current_x, wall_direction] = 1
-                # 打通相邻格子到当前格子的墙
-                opposite_direction = (wall_direction + 2) % 4
-                maze_data[adjacent_y, adjacent_x, opposite_direction] = 1
-                visited_cells[adjacent_y, adjacent_x] = 1
+                # 计算相邻格子的坐标
+                adjacent_y, adjacent_x = current_y, current_x
+                if wall_direction == 0:  # 上
+                    adjacent_y = current_y - 1
+                elif wall_direction == 1:  # 右
+                    adjacent_x = current_x + 1
+                elif wall_direction == 2:  # 下
+                    adjacent_y = current_y + 1
+                elif wall_direction == 3:  # 左
+                    adjacent_x = current_x - 1
 
-                # 将相邻格子的其他墙加入列表
-                for direction in range(4):
-                    new_wall_info = (adjacent_y, adjacent_x, direction)
-                    if not self.is_edge(new_wall_info, maze_size):
-                        if (adjacent_x, adjacent_y) not in self.center_cells or \
-                           (adjacent_x, adjacent_y) == (self.destination[0], self.destination[1]):
-                            wall_list.append(new_wall_info)
-            
-            wall_list.pop(random_index)
-            
-        # 5. 随机打通一些墙壁，创造多条路径
-        self.create_additional_paths(maze_data)
-        
-        # 6. 确保起点只有一个出口
-        self.ensure_start_point_single_exit(maze_data)
+                # 检查是否是非真实终点的中心区域
+                is_center = ((current_x, current_y) in self.center_cells and \
+                            (current_x, current_y) != (self.destination[0], self.destination[1])) or \
+                           ((adjacent_x, adjacent_y) in self.center_cells and \
+                            (adjacent_x, adjacent_y) != (self.destination[0], self.destination[1]))
 
-        return maze_data
+                # 如果不是中心区域且至少有一个格子未访问，则打通墙壁
+                if not is_center and (visited_cells[current_y, current_x] == 0 or \
+                                    visited_cells[adjacent_y, adjacent_x] == 0):
+                    # 如果当前格子或相邻格子是终点，跳过（保护终点的墙壁状态）
+                    if (current_x, current_y) == (self.destination[0], self.destination[1]) or \
+                       (adjacent_x, adjacent_y) == (self.destination[0], self.destination[1]):
+                        wall_list.pop(random_index)
+                        continue
+                    
+                    # 打通当前格子到相邻格子的墙
+                    maze_data[current_y, current_x, wall_direction] = 1
+                    # 打通相邻格子到当前格子的墙
+                    opposite_direction = (wall_direction + 2) % 4
+                    maze_data[adjacent_y, adjacent_x, opposite_direction] = 1
+                    visited_cells[adjacent_y, adjacent_x] = 1
+
+                    # 将相邻格子的其他墙加入列表
+                    for direction in range(4):
+                        new_wall_info = (adjacent_y, adjacent_x, direction)
+                        if not self.is_edge(new_wall_info, maze_size):
+                            if (adjacent_x, adjacent_y) not in self.center_cells or \
+                               (adjacent_x, adjacent_y) == (self.destination[0], self.destination[1]):
+                                wall_list.append(new_wall_info)
+                
+                wall_list.pop(random_index)
+                
+            # 5. 随机打通一些墙壁，创造多条路径
+            self.create_additional_paths(maze_data)
+            
+            # 6. 验证迷宫的合法性
+            if self.validate_maze(maze_data):
+                return maze_data
 
     def is_edge(self, wall, shape):
         """
@@ -514,12 +527,19 @@ class MazeGenerator(object):
                         opposite_direction = (direction + 2) % 4
                         maze_data[adjacent_y, adjacent_x, opposite_direction] = 1
 
-    def ensure_start_point_single_exit(self, maze_data):
+    def validate_maze(self, maze_data):
         """
-        确保起点只有一个出口，且该出口能通向终点
+        验证迷宫的合法性，确保：
+        1. 起点只有一个出口
+        2. 该出口能通向终点
+        
         参数:
             maze_data: 迷宫数据
+        返回:
+            bool: 迷宫是否合法
         """
+        from collections import deque
+        
         start_y, start_x = self.start_point[1], self.start_point[0]
         
         # 统计起点当前的出口数量和方向
@@ -528,84 +548,96 @@ class MazeGenerator(object):
             if maze_data[start_y, start_x, direction] == 1:
                 exits.append(direction)
         
-        # 如果有多个出口，需要选择一个合适的保留
+        # 如果没有出口，迷宫不合法
+        if len(exits) == 0:
+            return False
+        
+        # 如果有多个出口，需要选择一个有效的出口
         if len(exits) > 1:
-            # 使用深度优先搜索检查每个出口是否能到达终点
-            def can_reach_destination(start_pos, visited):
-                if start_pos == self.destination:
-                    return True
-                    
-                y, x = start_pos[1], start_pos[0]
-                visited.add((x, y))
-                
-                # 检查四个方向
-                for d in range(4):
-                    if maze_data[y, x, d] == 1:  # 如果这个方向没有墙
-                        # 计算下一个位置
-                        next_x = x
-                        next_y = y
-                        if d == 0:  # 上
-                            next_y = y - 1
-                        elif d == 1:  # 右
-                            next_x = x + 1
-                        elif d == 2:  # 下
-                            next_y = y + 1
-                        elif d == 3:  # 左
-                            next_x = x - 1
-                            
-                        # 如果下一个位置没有访问过且在迷宫范围内
-                        if (next_x, next_y) not in visited and \
-                           0 <= next_x < self.maze_size and \
-                           0 <= next_y < self.maze_size:
-                            if can_reach_destination((next_x, next_y), visited.copy()):
-                                return True
-                                
-                return False
-            
-            # 检查每个出口，找到能到达终点的出口
+            # 对每个出口进行BFS测试
             valid_exits = []
-            for direction in exits:
-                # 计算这个出口通向的第一个格子
-                next_y, next_x = start_y, start_x
-                if direction == 0:  # 上
-                    next_y = start_y - 1
-                elif direction == 1:  # 右
-                    next_x = start_x + 1
-                elif direction == 2:  # 下
-                    next_y = start_y + 1
-                elif direction == 3:  # 左
-                    next_x = start_x - 1
+            for test_exit in exits:
+                # 创建临时迷宫数据，关闭除test_exit外的所有出口
+                test_maze = maze_data.copy()
+                for direction in exits:
+                    if direction != test_exit:
+                        # 关闭当前格子的出口
+                        test_maze[start_y, start_x, direction] = 0
+                        # 关闭相邻格子的对应入口
+                        ny, nx = start_y, start_x
+                        if direction == 0: ny -= 1  # 上
+                        elif direction == 1: nx += 1  # 右
+                        elif direction == 2: ny += 1  # 下
+                        elif direction == 3: nx -= 1  # 左
+                        test_maze[ny, nx, (direction + 2) % 4] = 0
                 
-                # 检查这个出口是否能到达终点
-                if can_reach_destination((next_x, next_y), {(start_x, start_y)}):
-                    valid_exits.append(direction)
+                # 使用BFS检查此出口是否能到达终点
+                queue = deque([(self.start_point[0], self.start_point[1])])
+                visited = {(self.start_point[0], self.start_point[1])}
+                
+                while queue:
+                    x, y = queue.popleft()
+                    
+                    if (x, y) == self.destination:
+                        valid_exits.append(test_exit)
+                        break
+                    
+                    # 检查四个方向
+                    for d in range(4):
+                        if test_maze[y, x, d] == 1:
+                            nx, ny = x, y
+                            if d == 0: ny -= 1  # 上
+                            elif d == 1: nx += 1  # 右
+                            elif d == 2: ny += 1  # 下
+                            elif d == 3: nx -= 1  # 左
+                            
+                            if (nx, ny) not in visited and 0 <= nx < self.maze_size and 0 <= ny < self.maze_size:
+                                visited.add((nx, ny))
+                                queue.append((nx, ny))
             
-            # 如果找到了能到达终点的出口，随机选择一个保留
+            # 如果找到有效出口，随机选择一个并应用到迷宫
             if valid_exits:
                 keep_exit = random.choice(valid_exits)
+                # 关闭其他所有出口
+                for direction in exits:
+                    if direction != keep_exit:
+                        # 关闭当前格子的出口
+                        maze_data[start_y, start_x, direction] = 0
+                        # 关闭相邻格子的对应入口
+                        ny, nx = start_y, start_x
+                        if direction == 0: ny -= 1  # 上
+                        elif direction == 1: nx += 1  # 右
+                        elif direction == 2: ny += 1  # 下
+                        elif direction == 3: nx -= 1  # 左
+                        maze_data[ny, nx, (direction + 2) % 4] = 0
             else:
-                # 如果没有找到能到达终点的出口（这种情况不应该发生）
-                keep_exit = random.choice(exits)
+                return False  # 没有找到有效出口
+        
+        # 最后验证从起点是否能到达终点
+        queue = deque([(self.start_point[0], self.start_point[1])])
+        visited = {(self.start_point[0], self.start_point[1])}
+        
+        while queue:
+            x, y = queue.popleft()
             
-            # 关闭其他出口
-            for direction in exits:
-                if direction != keep_exit:
-                    # 关闭当前格子到相邻格子的墙
-                    maze_data[start_y, start_x, direction] = 0
+            if (x, y) == self.destination:
+                return True  # 找到了到终点的路径
+            
+            # 检查四个方向
+            for d in range(4):
+                if maze_data[y, x, d] == 1:  # 如果这个方向没有墙
+                    nx, ny = x, y
+                    if d == 0: ny -= 1  # 上
+                    elif d == 1: nx += 1  # 右
+                    elif d == 2: ny += 1  # 下
+                    elif d == 3: nx -= 1  # 左
                     
-                    # 关闭相邻格子到当前格子的墙
-                    adjacent_y, adjacent_x = start_y, start_x
-                    if direction == 0:  # 上
-                        adjacent_y = start_y - 1
-                    elif direction == 1:  # 右
-                        adjacent_x = start_x + 1
-                    elif direction == 2:  # 下
-                        adjacent_y = start_y + 1
-                    elif direction == 3:  # 左
-                        adjacent_x = start_x - 1
-                    
-                    opposite_direction = (direction + 2) % 4
-                    maze_data[adjacent_y, adjacent_x, opposite_direction] = 0
+                    next_pos = (nx, ny)
+                    if next_pos not in visited and 0 <= nx < self.maze_size and 0 <= ny < self.maze_size:
+                        visited.add(next_pos)
+                        queue.append(next_pos)
+        
+        return False  # 找不到到终点的路径
 
 if __name__ == "__main__":
     # 建一个迷宫游戏
@@ -615,17 +647,24 @@ if __name__ == "__main__":
     maze = MazeGenerator()
     
     print("使用方向键控制机器人移动,按'q'退出游戏")
-    print("目标:到达终点的黑白方格")
+    print("目标: 从起点到达终点，然后返回起点。")
     
     # 初始显示迷宫
     maze.update_display()
     
     # 设置窗口标题
-    pygame.display.set_caption('迷宫游戏')
+    pygame.display.set_caption('迷宫探索游戏')
+    
+    # 初始化状态变量
+    reached_destination = False
+    reached_start = False
     
     # 主游戏循环
     running = True
     while running:
+        # 重置移动状态
+        moved = False
+        
         for event in pygame.event.get():
             if event.type == QUIT:
                 running = False
@@ -633,22 +672,27 @@ if __name__ == "__main__":
                 if event.key == K_q:
                     running = False
                 elif event.key == K_UP:
-                    maze.move_robot('U')
+                    reached_destination, reached_start = maze.move_robot('U')
+                    moved = True
                 elif event.key == K_RIGHT:
-                    maze.move_robot('R')
+                    reached_destination, reached_start = maze.move_robot('R')
+                    moved = True
                 elif event.key == K_DOWN:
-                    maze.move_robot('D')
+                    reached_destination, reached_start = maze.move_robot('D')
+                    moved = True
                 elif event.key == K_LEFT:
-                    maze.move_robot('L')
+                    reached_destination, reached_start = maze.move_robot('L')
+                    moved = True
                 
                 # 更新显示
                 maze.update_display()
                 
-                # 检查是否到达终点
-                if maze.robot['loc'] == maze.destination:
-                    print("恭喜!你已到达终点!")
-                    pygame.time.wait(1000)  # 等待1秒
-                    running = False
+                # 只在移动后才显示提示信息
+                if moved:
+                    if reached_destination:
+                        print("到达终点！")
+                    elif reached_start:
+                        print("回到起点！")
     
     # 关闭游戏
     maze.close_display()
