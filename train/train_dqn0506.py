@@ -44,7 +44,7 @@ def main():
     os.makedirs(log_dir, exist_ok=True)
     
     # 设置并行环境数量和迷宫大小
-    n_envs = 8
+    n_envs = 1
     maze_size = 16
     
     # 创建并行训练环境
@@ -52,7 +52,7 @@ def main():
     env = VecMonitor(env)
     
     # 创建评估环境
-    eval_env = SubprocVecEnv([make_env(size=maze_size, seed=1000+i) for i in range(2)])
+    eval_env = SubprocVecEnv([make_env(size=maze_size, seed=SEED+i) for i in range(n_envs)])
     eval_env = VecMonitor(eval_env)
     
     # 设置策略网络架构
@@ -66,7 +66,7 @@ def main():
         "MultiInputPolicy",  # 自动处理Dict观测空间
         env,
         learning_rate=5e-4,
-        buffer_size=50000,
+        buffer_size=5000,
         learning_starts=1000,
         batch_size=128,
         tau=1.0,
@@ -104,7 +104,7 @@ def main():
     try:
         print(f"开始训练（使用 {n_envs} 个并行环境）...")
         model.learn(
-            total_timesteps=500000,
+            total_timesteps=50000,
             callback=[checkpoint_callback, eval_callback],
             log_interval=10,
             progress_bar=True

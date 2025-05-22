@@ -23,8 +23,8 @@ class MazeEnv(gym.Env):
         Dict类型，包含五个键：
         - curr_position: Box(low=0, high=size-1, shape=(2,), dtype=int32)
           表示机器人的当前(x,y)坐标
-        - curr_direction: Discrete(4)
-          表示机器人的当前朝向，0:上, 1:右, 2:下, 3:左
+        - curr_direction: Box(low=0, high=1, shape=(4,), dtype=int32)
+          表示机器人的当前朝向，独热编码：[上,右,下,左]
         - curr_cell: MultiBinary(4)
           表示当前位置四个方向的墙壁状态，[上,右,下,左]，1表示有墙，0表示无墙
         - explored_cell: Box(low=0, high=1, shape=(size, size), dtype=int32)
@@ -77,7 +77,13 @@ class MazeEnv(gym.Env):
                 shape=(2,), 
                 dtype=np.int32
             ),
-            'curr_direction': spaces.Discrete(4),  # 当前朝向：0(上), 1(右), 2(下), 3(左)
+            'curr_direction': spaces.Box(  # 当前朝向，独热编码：[上,右,下,左]
+                low=0,
+                high=1,
+                shape=(4,),
+                dtype=np.int32
+            ),
+            
             'curr_cell': spaces.MultiBinary(4),  # 四个方向的墙：[上,右,下,左]
             'explored_cell': spaces.Box(  # 已探索的格子
                 low=0,
@@ -258,6 +264,10 @@ class MazeEnv(gym.Env):
         x, y = self.maze.robot['loc']
         dir_idx = self._direction_to_idx[self.maze.robot['dir']]
         
+        # 创建方向的独热编码
+        dir_one_hot = np.zeros(4, dtype=np.int32)
+        dir_one_hot[dir_idx] = 1
+        
         # 获取当前格子的墙壁状态
         curr_cell = self.maze.maze_data[y, x, :4]
         
@@ -266,7 +276,7 @@ class MazeEnv(gym.Env):
         
         return {
             'curr_position': np.array([x, y], dtype=np.int32),
-            'curr_direction': dir_idx,
+            'curr_direction': dir_one_hot,
             'curr_cell': curr_cell,
             'explored_cell': self.explored_cell,
             'explored_map': self.explored_map,

@@ -57,7 +57,8 @@ class CenterOrientedMazeAgent:
         
         # 更新当前位置和方向
         self.curPos = tuple(obs['curr_position'])
-        self.curDir = obs['curr_direction']
+        # 将独热编码转换为索引
+        self.curDir = np.argmax(obs['curr_direction'])
         
         # 如果有回溯路径，继续执行
         if self.backPath:

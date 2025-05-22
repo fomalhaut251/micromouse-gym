@@ -73,7 +73,9 @@ class ConvertedMazeTester:
                         
                         # 打印状态信息
                         print(f"\n当前位置: {obs['curr_position']}")
-                        print(f"当前朝向: {obs['curr_direction']}")
+                        dir_idx = np.argmax(obs['curr_direction'])
+                        dir_names = ['上', '右', '下', '左']
+                        print(f"当前朝向: {dir_names[dir_idx]} (独热编码: {obs['curr_direction']})")
                         print(f"奖励: {reward:.3f}")
                         
                         # 检查是否到达终点或超出步数

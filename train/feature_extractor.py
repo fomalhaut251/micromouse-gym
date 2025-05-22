@@ -21,6 +21,8 @@ class FeatureExtractor:
         self.large_size = 2 * maze_size + 1
         
         # 定义方向和对应的偏移量
+        # 方向索引对应MazeEnv中curr_direction的独热编码位置：
+        # [1,0,0,0]：上(0), [0,1,0,0]：右(1), [0,0,1,0]：下(2), [0,0,0,1]：左(3)
         self.directions = {
             0: (-1, 0),   # 上
             1: (0, 1),    # 右

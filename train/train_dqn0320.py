@@ -176,7 +176,7 @@ def main():
     try:
         print(f"开始训练（使用 {n_envs} 个并行环境）...")
         model.learn(
-            total_timesteps=1_000_00,
+            total_timesteps=1_000_000,
             log_interval=100,
             progress_bar=True
         )

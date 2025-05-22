@@ -1,17 +1,18 @@
 import gymnasium as gym
 import numpy as np
+import heapq
 import time
 from gymnasium_env.envs.maze_env import MazeEnv
 
-class RightHandMazeAgent:
-    """基于右手法则的迷宫探索智能体
+class MemoryMazeAgent:
+    """迷宫探索智能体，具有记忆和探索功能
     
-    该智能体实现了基于右手法则的迷宫探索算法，具有以下特点:
-    1. 始终保持右手贴墙行走
-    2. 遇到岔路时优先选择右转，其次直行，最后左转
-    3. 遇到死胡同时自动回头
-    4. 记录已探索区域，避免重复探索
-    5. 当找到终点或探索完所有区域后结束
+    该智能体实现了基于记忆的迷宫探索算法，具有以下特点:
+    1. 记录已探索区域的地图信息
+    2. 优先探索未探索区域，方向优先级为左、前、右、后
+    3. 在遇到死胡同时，能够回溯到上一个有未探索方向的岔路口
+    4. 避免重复探索已访问过的区域
+    5. 当所有区域都探索完后，自动回到起点
     """
     
     def __init__(self, move_delay=0.5):
@@ -97,7 +98,8 @@ class RightHandMazeAgent:
         
         # 更新当前位置和方向
         self.curPos = tuple(obs['curr_position'])
-        self.curDir = obs['curr_direction']
+        # 将独热编码转换为索引
+        self.curDir = np.argmax(obs['curr_direction'])
         
         nextAction = None
         
@@ -124,12 +126,12 @@ class RightHandMazeAgent:
             x, y = self.curPos
             unexploredDirs = []
             
-            # 按右手法则确定移动方向优先级（右、前、左、后）
-            right = (self.curDir + 1) % 4
-            front = self.curDir
+            # 获取相对方向的优先级列表（左、前、右、后）
             left = (self.curDir - 1) % 4
+            front = self.curDir
+            right = (self.curDir + 1) % 4
             back = (self.curDir + 2) % 4
-            priorityList = [right, front, left, back]
+            priorityList = [left, front, right, back]
             
             # 检查四个方向
             for d in priorityList:
@@ -157,11 +159,18 @@ class RightHandMazeAgent:
                         if jx == x and jy == y:
                             # 更新未探索方向
                             self.junctions[i] = (x, y, unexploredDirs)
+                            print(f"更新岔路口: ({int(x)}, {int(y)}), 未探索方向: {[self.dirNames[d] for d in unexploredDirs]}")
+                            # print("当前所有岔路口状态:")
+                            # for jx, jy, dirs in self.junctions:
+                            #     print(f"- 位置({int(jx)}, {int(jy)}), 未探索方向: {[self.dirNames[d] for d in dirs]}")
                             break
                     else:
                         # 添加新的岔路口
                         self.junctions.append((x, y, unexploredDirs))
                         print(f"新增岔路口: ({int(x)}, {int(y)}), 未探索方向: {[self.dirNames[d] for d in unexploredDirs]}")
+                        # print("当前所有岔路口状态:")
+                        # for jx, jy, dirs in self.junctions:
+                        #     print(f"- 位置({int(jx)}, {int(jy)}), 未探索方向: {[self.dirNames[d] for d in dirs]}")
                 
                 # 取第一个未探索方向
                 nextDir = unexploredDirs[0]
@@ -242,14 +251,14 @@ class RightHandMazeAgent:
 
 if __name__ == "__main__":
     try:
-        print("开始运行右手法则迷宫探索算法...")
+        print("开始运行有记忆的迷宫探索算法...")
         # 设置随机种子
         seed = 20  # 可以修改为任意整数
         print(f"使用随机种子: {seed}")
         
         # 创建迷宫环境
         env = gym.make('gymnasium_env/Maze-v0', render_mode="human", size=16)
-        agent = RightHandMazeAgent(move_delay=0.1)  # 设置0.5秒的移动延时
+        agent = MemoryMazeAgent(move_delay=0.1)  # 设置0.5秒的移动延时
         
         # 重置环境时传入随机种子
         obs, info = env.reset(seed=seed)
@@ -270,4 +279,4 @@ if __name__ == "__main__":
         env.close()
         print("算法运行完成！")
     except Exception as e:
-        print(f"运行时出错: {e}") 
+        print(f"运行时出错: {e}")

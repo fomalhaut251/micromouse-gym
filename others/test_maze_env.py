@@ -111,7 +111,9 @@ class MazeVisualizer:
         print("\n=== 步骤信息 ===")
         print("观测值:")
         print(f"  位置: {obs['curr_position']}")
-        print(f"  方向: {obs['curr_direction']}")
+        dir_idx = np.argmax(obs['curr_direction'])
+        dir_names = ['上', '右', '下', '左']
+        print(f"  方向: {dir_names[dir_idx]} (独热编码: {obs['curr_direction']})")
         print(f"  当前位置墙壁: [上右下左] = {obs['curr_cell']}")
         print(f"奖励: {reward:.3f}")
         
